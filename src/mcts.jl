@@ -64,7 +64,7 @@ function move_to_leaf(mcts::MCTS)
       q = edge.stats[:Q]
       if u + q > maxQU
         maxQU = u + q
-        simulation_action = ???
+        simulation_action = edge.action
         simulation_edge = edge
       end
     end
