@@ -5,11 +5,30 @@
 
 using Distributions
 
+########################
+# n = number of games
+# w = number of wins
+# q = probability of winning (w/n)
+# p = ???
+mutable struct EdgeStat
+  n::Int
+  w::Int
+  p::Float64
+  q::Float64
+end
+
+struct Edge
+  out_node::Int
+  stats::EdgeStat
+end
+
+
+########################
 struct Node
   state
   player_turn
   id
-  edges
+  edges::Vector{Edge}
 end
 function Node(state)
   Node(state, state.player_turn, state.id, Vector{Int}())
@@ -19,19 +38,13 @@ is_leaf(node::Node) = isempty(node.edges)
 length(node::Node) = length(node.edges)
 
 ########################
-struct Edge
-  out_node::Node
-  stats::Dict{Symbol, Float64}
-end
-
-########################
-struct MCTS
+mutable struct MCTS
   root::Node
   nodes::Dict{Int, Node}
-  edges::Dict{Int, Edge}
 end
 
 add_node(mcts::MCTS, node::Node) = (mcts.nodes[node.id] = node)
+add_edge(mcts::MCTS, node::Node, edge::Edge) = push!(node.edges, edge)
 length(mcts::MCTS) = length(mcts.nodes)
 
 function move_to_leaf(mcts::MCTS)
@@ -55,13 +68,12 @@ function move_to_leaf(mcts::MCTS)
 
     nb = 0
     for edge in current_node.edges
-      nb += edges[edge_id].stats[:N]
+      nb += edge.stats.n
     end
 
-    for (idx, edge_id) in enumerate(current_node.edges)
-      edge = edges[edge_id]
-      u = mcts.cpuct * ((one(epsilon) - epsilon) * edge.stats[:P] + epsilon * nu[idx]) * sqrt(nb)/(one(epsilon) + edge.stats[:N])
-      q = edge.stats[:Q]
+    for (idx, edge) in enumerate(current_node.edges)
+      u = mcts.cpuct * ((one(epsilon) - epsilon) * edge.stats.p + epsilon * nu[idx]) * sqrt(nb)/(one(epsilon) + edge.stats.n)
+      q = edge.stats.q
       if u + q > maxQU
         maxQU = u + q
         simulation_action = edge.action
@@ -82,8 +94,8 @@ function back_fill(mcts::MCTS, leaf, value, breadcrumbs)
   for edge in breadcrumbs
     player_turn = edge.player_turn
     direction = player_turn == current_player ? 1 : -1
-    edge.stats[:N] += 1
-    edge.stats[:W] += value*direction
-    edge.stats[:Q] = edge.stats[:W] / edge.stats[:N]
+    edge.stats.n += 1
+    edge.stats.w += value*direction
+    edge.stats.q = edge.stats.w / edge.stats.n
   end
 end

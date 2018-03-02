@@ -12,3 +12,6 @@ function step(game::Game, action)
 
   return Game(next_state, next_player(game), value, done)
 end
+
+function take_action(game::Game, action)
+end

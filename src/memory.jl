@@ -1,3 +1,12 @@
+using StatsBase: sample
+
+struct MemoryChunk{T}
+  state::T
+  id::Int
+  av::Float64
+  player_turn::Int
+end
+
 struct Memory{T}
   st_memory::Vector{T}
   lt_memory::Vector{T}
@@ -18,7 +27,11 @@ end
 function clear_lt!(memory::Memory)
 end
 
-function commit_st!(memory::Memory)
+function commit_st!(memory::Memory, identities, state, action_values)
+  for r in identities(state, action_values???)
+    mem_chunk = MemoryChunk(r[1], r[1].id, r[2], r[1].player_turn)
+    push!(memory.st_memory, mem_chunk)
+  end
 end
 
 function commit_lt!(memory::Memory)
@@ -30,4 +43,8 @@ end
 
 function length(memory::Memory)
   length(memory.lt_memory)
+end
+
+function get_minibatch(memory)
+  sample(memory.lt_memory, min(Config.BATCH_SIZE, length(memory.lt_memory)), replace = false) 
 end
