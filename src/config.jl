@@ -23,4 +23,9 @@ const TRAINING_LOOPS = 10
 
 # TODO: Model constants
 
+# INITIALIZE
+const INITIAL_MEMORY_VERSION = 0
+const INITIAL_MODEL_VERSION = 0
+const INITIAL_RUN_NUMBER = 0
+
 end

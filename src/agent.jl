@@ -31,14 +31,14 @@ function Agent(name, stat_size, action_size, mcts_simulations, cpuct::T, model::
        )
 end
 
-function replay!(agent::AbstractAgent, memory::Memory)
+function replay!(agent::T, memory::Memory) where { T <: AbstractAgent}
   for i in 1:Config.TRAINING_LOOPS
     minibatch = get_minibatch(memory)
 
-    training_states = [convert_to_model_input(row["state"]) for row in minibatch]
+    training_states = [convert_to_model_input(row.state) for row in minibatch]
     training_targets = Dict(
-      :value_head => [row["value"] for row in minibatch],
-      :policy_head => [row["av"] for row in minibatch]
+      :value_head => [row.value for row in minibatch],
+      :policy_head => [row.av for row in minibatch]
     )
     fit = fit!(agent.model, training_states, training_targets, 
                epochs=config.EPOCHS, verbose=1, validation_split=0, batch_size = 32)
@@ -153,12 +153,7 @@ function get_av(agent::AbstractAgent, tau)
 end
 
 function choose_action(agent::AbstractAgent, ppi, values, tau)
-  ## Note: is tau just a flag here?
-  if tau == 0
-    action = rand(find(ppi .== max(ppi)))
-  else
-    action = indmax(rand(Multinomial(1, ppi)))
-  end
+  action = tau ? indmax(rand(Multinomial(1, ppi))) : rand(find(ppi .== max(ppi)))
 
   value = values[action]
 
@@ -178,10 +173,111 @@ change_rootMCTS(agent::AbstractAgent, state) = (agent.mcts.root = agent.mcts.nod
 ###################
 
 struct PlayResult
+  scores::Dict{String, Int}
 end
 
-function play_match(agent1::AbstractAgent, agent2::AbstractAgent)
+scores(pr::PlayResult, agent::T) where { T <: AbstractAgent} = pr.scores[agent.name]
+
+function play_matches_between_versions(player1::T1, player2::T2) where {T1 <: AbstractAgent, T2 <: AbstractAgent}
+  play_result = play_matches(player1, player2, episodes, turns_until_tau0, nothing, goes_first)
+
+  return play_result
 end
 
-function play_matches(player1::AbstractAgent, player2::AbstractAgent)
+function play_matches(player1::T1, player2::T2, episodes, turns_until_tau0, memory = nothing, goes_first = 0) where {T1 <: AbstractAgent, T2 <: AbstractAgent}
+  env = Game()???
+  scores = Dict(player1.name => 0, "drawn" => 0, player2.name => 0)
+  sp_scores = Dict("sp" => 0, "drawn" => 0, "nsp" => 0) # What is this thing?
+  points = Dict(player1.name => Vector(), player2.name => Vector())
+
+  for ep in 1:episodes
+    logger("==================")
+    logger("Episode %d of %d", ep+1, episodes)
+    logger("==================")
+
+    state = reset!(env)
+    done = false
+    turn = 0
+
+    # Is it correct idea? To remove players mtcs... Not so sure about that
+    reset!(player1.mtcs)
+    reset!(player2.mtcs)
+
+    if goes_first = 0
+      player1_starts = rand(1:2)
+    else
+      player1_starts = goes_first
+    end
+
+    if player1_starts == 1
+      players = Dict(1 => Dict(:agent => player1, :name => player1.name),
+                     2 => Dict(:agent => player2, :name => player2.name))
+
+      logger(player1.name + " plays as X")
+    else
+      players = Dict(2 => Dict(:agent => player1, :name => player1.name),
+                     1 => Dict(:agent => player2, :name => player2.name))
+
+      logger("${player2.name} plays as X")
+      logger("-------------")
+    end
+
+    ## Main game cycle
+    while !done
+      turn += 1
+
+      #### Run the MTCS algo and return the result
+      action, ppi, mtcs_value, nn_value = act(players[state.player_turn][:agent], state, turn < turns_until_tau0)
+
+      (memory != nothing) && commit_st!(memory, env.identities, state, ppi)
+      # TODO: Some logging
+      
+      # Do the action
+      # the value of the newState from the POV of the new playerTurn i.e. -1 if the previous player played a winning move
+      state, value, done, _ = step(env, action)
+
+      if done
+        if memory != nothing
+          for move in memory.st_memory
+            if move.player_turn == state.player_turn
+              move.value = value
+            else
+              move.value = -value
+            end
+          end
+
+          commit_lt!(memory)
+        end
+
+        win_player = value == 1 ? state.player_turn : alternate_player(state.player_turn)
+        if value == 1
+          logger("${players[win_player][:name]} WINS!")
+          scores[players[win_player][:name]] += 1
+          if state.player_turn == 1
+            sp_scores[:sp] += 1
+          else
+            sp_scores[:nsp] += 1
+          end
+        elseif value == -1 
+          logger("${players[win_player][:name]} WINS!")
+          scores[players[win_player][:name]] += 1
+          if state.player_turn == 1
+            sp_scores[:nsp] += 1
+          else
+            sp_scores[:sp] += 1
+          end
+        else
+          logger("DRAW...")
+          scores[:drawn] += 1
+          sp_scores[:drawn] += 1
+        end
+        
+        pts = state.score
+        push!(points[state.player_turn][:name], pts[1])
+        push!(points[alternate_player(state.player_turn)][:name], pts[2])
+      end
+    end
+  end
+
+  return PlayResult(scores, memory, points, sp_scores)
 end

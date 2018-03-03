@@ -5,6 +5,7 @@ struct MemoryChunk{T}
   id::Int
   av::Float64
   player_turn::Int
+  value::Int
 end
 
 struct Memory{T}
