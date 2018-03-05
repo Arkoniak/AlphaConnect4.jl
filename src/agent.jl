@@ -174,6 +174,8 @@ change_rootMCTS(agent::AbstractAgent, state) = (agent.mcts.root = agent.mcts.nod
 
 struct PlayResult
   scores::Dict{String, Int}
+  memory::Memory
+  sp_scores::Dict{String, Int}
 end
 
 scores(pr::PlayResult, agent::T) where { T <: AbstractAgent} = pr.scores[agent.name]
@@ -188,20 +190,19 @@ function play_matches(player1::T1, player2::T2, episodes, turns_until_tau0, memo
   env = Game()???
   scores = Dict(player1.name => 0, "drawn" => 0, player2.name => 0)
   sp_scores = Dict("sp" => 0, "drawn" => 0, "nsp" => 0) # What is this thing?
-  points = Dict(player1.name => Vector(), player2.name => Vector())
 
   for ep in 1:episodes
     logger("==================")
     logger("Episode %d of %d", ep+1, episodes)
     logger("==================")
 
-    state = reset!(env)
+    env = reset(env)
     done = false
     turn = 0
 
     # Is it correct idea? To remove players mtcs... Not so sure about that
-    reset!(player1.mtcs)
-    reset!(player2.mtcs)
+    reset!(player1.mcts)
+    reset!(player2.mcts)
 
     if goes_first = 0
       player1_starts = rand(1:2)
@@ -226,42 +227,42 @@ function play_matches(player1::T1, player2::T2, episodes, turns_until_tau0, memo
     while !done
       turn += 1
 
-      #### Run the MTCS algo and return the result
-      action, ppi, mtcs_value, nn_value = act(players[state.player_turn][:agent], state, turn < turns_until_tau0)
+      #### Run the MCTS algo and return the result
+      action, ppi, mcts_value, nn_value = act(players[env.player][:agent], env.state, turn < turns_until_tau0)
 
-      (memory != nothing) && commit_st!(memory, env.identities, state, ppi)
+      (memory != nothing) && commit_st!(memory, state, ppi)
       # TODO: Some logging
       
       # Do the action
       # the value of the newState from the POV of the new playerTurn i.e. -1 if the previous player played a winning move
-      state, value, done, _ = step(env, action)
+      env = step(env, action)
 
-      if done
+      if env.done
         if memory != nothing
           for move in memory.st_memory
-            if move.player_turn == state.player_turn
-              move.value = value
+            if move.player_turn == env.player
+              move.value = env.value
             else
-              move.value = -value
+              move.value = -env.value
             end
           end
 
           commit_lt!(memory)
         end
 
-        win_player = value == 1 ? state.player_turn : alternate_player(state.player_turn)
-        if value == 1
+        win_player = env.value == 1 ? env.player : next_player(env)
+        if env.value == 1
           logger("${players[win_player][:name]} WINS!")
           scores[players[win_player][:name]] += 1
-          if state.player_turn == 1
+          if env.player == 1
             sp_scores[:sp] += 1
           else
             sp_scores[:nsp] += 1
           end
-        elseif value == -1 
+        elseif env.value == -1 
           logger("${players[win_player][:name]} WINS!")
           scores[players[win_player][:name]] += 1
-          if state.player_turn == 1
+          if env.player == 1
             sp_scores[:nsp] += 1
           else
             sp_scores[:sp] += 1
@@ -271,13 +272,9 @@ function play_matches(player1::T1, player2::T2, episodes, turns_until_tau0, memo
           scores[:drawn] += 1
           sp_scores[:drawn] += 1
         end
-        
-        pts = state.score
-        push!(points[state.player_turn][:name], pts[1])
-        push!(points[alternate_player(state.player_turn)][:name], pts[2])
       end
     end
   end
 
-  return PlayResult(scores, memory, points, sp_scores)
+  return PlayResult(scores, memory, sp_scores)
 end
