@@ -180,14 +180,13 @@ end
 
 scores(pr::PlayResult, agent::T) where { T <: AbstractAgent} = pr.scores[agent.name]
 
-function play_matches_between_versions(player1::T1, player2::T2) where {T1 <: AbstractAgent, T2 <: AbstractAgent}
+function play_matches_between_versions(game::G, player1::T1, player2::T2) where {T1 <: AbstractAgent, T2 <: AbstractAgent}
   play_result = play_matches(player1, player2, episodes, turns_until_tau0, nothing, goes_first)
 
   return play_result
 end
 
-function play_matches(player1::T1, player2::T2, episodes, turns_until_tau0, memory = nothing, goes_first = 0) where {T1 <: AbstractAgent, T2 <: AbstractAgent}
-  env = Game()???
+function play_matches(game::G, player1::T1, player2::T2, episodes, turns_until_tau0, memory = nothing, goes_first = 0) where {T1 <: AbstractAgent, T2 <: AbstractAgent, G <: AbstractGame}
   scores = Dict(player1.name => 0, "drawn" => 0, player2.name => 0)
   sp_scores = Dict("sp" => 0, "drawn" => 0, "nsp" => 0) # What is this thing?
 
@@ -196,11 +195,10 @@ function play_matches(player1::T1, player2::T2, episodes, turns_until_tau0, memo
     logger("Episode %d of %d", ep+1, episodes)
     logger("==================")
 
-    env = reset(env)
-    done = false
+    env = game()
     turn = 0
 
-    # Is it correct idea? To remove players mtcs... Not so sure about that
+    # Is it correct idea? To remove players mcts... Not so sure about that
     reset!(player1.mcts)
     reset!(player2.mcts)
 
@@ -224,7 +222,7 @@ function play_matches(player1::T1, player2::T2, episodes, turns_until_tau0, memo
     end
 
     ## Main game cycle
-    while !done
+    while !env.done
       turn += 1
 
       #### Run the MCTS algo and return the result
