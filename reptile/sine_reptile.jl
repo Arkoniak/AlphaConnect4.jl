@@ -3,7 +3,10 @@
 
 using Flux
 
+srand(0)
+
 runif(low::Float64, high::Float64) = (high - low)*rand() + low
+pytorch_init(dims...) = 1/sqrt(dims[1])*rand(dims...)
 
 struct SineTask
     phase::Float64
@@ -34,7 +37,9 @@ struct ReptileModel{T} <: AbstractReptileModel
     model::T
 end
 function ReptileModel()
-    ReptileModel(Chain(Dense(1, 64, tanh), Dense(64, 64, tanh), Dense(64, 1)))
+    ReptileModel(Chain(Dense(1, 64, tanh; initW = pytorch_init, initb = pytorch_init),
+                       Dense(64, 64, tanh; initW = pytorch_init, initb = pytorch_init),
+                       Dense(64, 1; initW = pytorch_init, initb = pytorch_init)))
 end
 
 loss(m::RM, x, y) where {RM <: AbstractReptileModel} =
@@ -72,7 +77,7 @@ function train!(m::RM; inner_epochs = 1, ntrain = 10,
 
         # Interpolate between current weights and trained weights from this task
         # I.e. (weights_before - weights_after) is the meta-gradient
-        outerstepsize = outerstepsize0 * (1.0 - (iter - 1) / niter) # linear schedule
+        outerstepsize = outerstepsize0 * (1.0 - iter / niter) # linear schedule
 
         for (d1, d2) in zip(weights_before, params(m.model))
             d2.data .= d1 .+ outerstepsize*(d2.data .- d1)
