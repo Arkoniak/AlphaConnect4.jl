@@ -36,10 +36,16 @@ abstract type AbstractReptileModel end
 struct ReptileModel{T} <: AbstractReptileModel
     model::T
 end
+# function ReptileModel()
+#     ReptileModel(Chain(Dense(1, 64, tanh; initW = pytorch_init, initb = pytorch_init),
+#                        Dense(64, 64, tanh; initW = pytorch_init, initb = pytorch_init),
+#                        Dense(64, 1; initW = pytorch_init, initb = pytorch_init)))
+# end
+
 function ReptileModel()
-    ReptileModel(Chain(Dense(1, 64, tanh; initW = pytorch_init, initb = pytorch_init),
-                       Dense(64, 64, tanh; initW = pytorch_init, initb = pytorch_init),
-                       Dense(64, 1; initW = pytorch_init, initb = pytorch_init)))
+    ReptileModel(Chain(Dense(1, 64, tanh),
+                       Dense(64, 64, tanh),
+                       Dense(64, 1)))
 end
 
 loss(m::RM, x, y) where {RM <: AbstractReptileModel} =
@@ -57,16 +63,23 @@ end
 train_on_batch!(m::RM, task::SineTask, ids::Vector{Int}, innerstepsize) where {RM <: AbstractReptileModel} =
   train_on_batch!(m, task.x[:, ids], task.y[:, ids], innerstepsize)
 
-function train!(m::RM; inner_epochs = 1, ntrain = 10,
+function train!(m::RM; tasks = SineTask[], eval_task = SineTask(), inner_epochs = 1, ntrain = 10,
                outerstepsize0 = 0.1, niter = 30_000,
                innerstepsize = 0.02, ninneriter = 32) where {RM <: AbstractReptileModel}
 
-    eval_task = SineTask()
     eval_ids = randperm(length(eval_task.x))[1:ntrain]
+    f_output = open("reptile.csv", "w")
+    res = Vector{Float64}()
+    res2 = Vector{Float64}()
+    !isempty(tasks) && (niter = length(tasks))
     for iter in 1:niter
         weights_before = deepcopy([x.data for x in params(m.model)])
         # Do SGD on task
-        f = SineTask()
+        if !isempty(tasks)
+            f = tasks[iter]
+        else
+            f = SineTask()
+        end
         inds = randperm(length(f.x))
         for _ in 1:inner_epochs
             for start in 1:ntrain:length(f.x)
@@ -83,6 +96,13 @@ function train!(m::RM; inner_epochs = 1, ntrain = 10,
             d2.data .= d1 .+ outerstepsize*(d2.data .- d1)
         end
 
+        model_before = deepcopy(m)
+        for inneriter in 1:ninneriter
+            train_on_batch!(m, eval_task, eval_ids, innerstepsize)
+        end
+        push!(res, Flux.data(loss(m, eval_task.x, eval_task.y)))
+        m = model_before
+
         if (iter % 1000 == 0)
             # weights_before = deepcopy([x.data for x in params(m.model)])
             model_before = deepcopy(m)
@@ -96,10 +116,16 @@ function train!(m::RM; inner_epochs = 1, ntrain = 10,
             # end
         end
     end
+
+    for x in res
+        write(f_output, "$x\n")
+    end
+    close(f_output)
 end
 
+tasks = [SineTask() for _ in 1:30_000]
 model = ReptileModel()
-train!(model)
+train!(model, tasks = tasks)
 
 f1 = SineTask()
 train_ids = randperm(50)[1:10]
@@ -259,3 +285,8 @@ end
 
 @show layer.W.data
 @show layer.b.data
+
+inds = [1, 2, 3, 4, 5, 6, 7]
+inds[1:3]
+
+collect(1:10:50)

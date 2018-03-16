@@ -1,0 +1,35 @@
+---
+title: "R Notebook"
+output: html_notebook
+---
+
+```{r}
+library(ggplot2)
+library(readr)
+library(magrittr)
+library(dplyr)
+```
+
+```{r}
+df <- read_csv("reptile.csv") %T>% { names(.) <- c("y")} %>% mutate(x = row_number()) %>% filter(x >= 3)
+```
+
+```{r}
+head(df)
+```
+
+```{r}
+ggplot(df, aes(x = x, y = y)) + geom_line(size = 0.1)
+```
+
+```{r}
+df2 <- read_csv("reptile.csv") %T>% { names(.) <- c("y")} %>% mutate(x = row_number()) %>% filter(x >= 3)
+ggplot(df2, aes(x = x, y = y)) + geom_line(size = 0.1) +
+  geom_vline(xintercept = 4000, colour = "tomato")
+```
+
+```{r}
+df2 <- read_csv("reptile_pytorch.csv") %T>% { names(.) <- c("y")} %>% mutate(x = row_number())
+ggplot(df2, aes(x = x, y = y)) + geom_line(size = 0.1) + scale_y_log10()
+```
+
