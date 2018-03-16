@@ -2,6 +2,7 @@
 # PyTorch gist implemented in Flux
 
 using Flux
+using Knet
 
 srand(0)
 
@@ -33,7 +34,7 @@ function SineTask(phase::Float64, ampl::Float64; xmin = -5.0, xmax = 5.0, npoint
 end
 
 abstract type AbstractReptileModel end
-struct ReptileModel{T} <: AbstractReptileModel
+struct FluxReptile{T} <: AbstractReptileModel
     model::T
 end
 # function ReptileModel()
@@ -42,14 +43,16 @@ end
 #                        Dense(64, 1; initW = pytorch_init, initb = pytorch_init)))
 # end
 
-function ReptileModel()
-    ReptileModel(Chain(Dense(1, 64, tanh),
-                       Dense(64, 64, tanh),
-                       Dense(64, 1)))
+function FluxReptile()
+    FluxReptile(Chain(Dense(1, 64, tanh),
+                      Dense(64, 64, tanh),
+                      Dense(64, 1)))
 end
 
+predict(m::FluxReptile, x) = m.model(x)
+
 loss(m::RM, x, y) where {RM <: AbstractReptileModel} =
-    mean((m.model(x) .- y).^2)
+    mean(abs2, predict(m, x) .- y)
 
 function train_on_batch!(m::RM, batch_x, batch_y, innerstepsize) where {RM <: AbstractReptileModel}
     l = loss(m, batch_x, batch_y)
@@ -290,3 +293,35 @@ inds = [1, 2, 3, 4, 5, 6, 7]
 inds[1:3]
 
 collect(1:10:50)
+
+##################
+m1 = Chain(Dense(1, 64, tanh), Dense(64, 64, tanh), Dense(64, 1))
+loss(m, x, y) = mean(abs2, m(reshape(x, 1, :)) .- reshape(y, 1, :))
+loss(m1, [0.1, 0.2, 0.3], [10.0, 11.0, 12.0])
+
+l = loss(m1, [0.1, 0.2, 0.3], [10.0, 11.0, 12.0])
+Flux.Tracker.back!(l)
+for p in params(m1)
+    p.data .-= 0.02 * p.grad
+    p.grad .= 0.0
+end
+
+w1 = deepcopy(Flux.data.(params(m1)))
+
+function predict(w, x)
+  x = tanh.(w[1] * reshape(x, 1, :) .+ w[2])
+  x = tanh.(w[3]*x .+ w[4])
+  x = w[5]*x .+ w[6]
+end
+
+loss2(w, x, y) = mean(abs2, predict(w, x) .- reshape(y, 1, :))
+loss2(w1, [0.1, 0.2, 0.3], [10.0, 11.0, 12.0])
+lossgrad = grad(loss2)
+
+l = lossgrad(w1, [0.1, 0.2, 0.3], [10.0, 11.0, 12.0])
+for i in 1:length(l)
+    w1[i] -= 0.02 * l[i]
+end
+
+
+predict(w1, [0.1, 0.2, 0.3])
