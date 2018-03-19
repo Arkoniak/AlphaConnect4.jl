@@ -12,8 +12,8 @@ pytorch_init(dims...) = 1/sqrt(dims[1])*rand(dims...)
 struct SineTask
     phase::Float64
     ampl::Float64
-    x::Array{Float64, 2}
-    y::Array{Float64, 2}
+    x::Vector{Float64}
+    y::Vector{Float64}
 end
 function SineTask(; min_phase = 0.0, max_phase = 2π,
     min_ampl = 0.1, max_ampl = 5.0,
@@ -24,13 +24,13 @@ function SineTask(; min_phase = 0.0, max_phase = 2π,
     x = collect(linspace(xmin, xmax, npoints))
     y = ampl*sin.(x + phase)
 
-    SineTask(phase, ampl, reshape(x, 1, :), reshape(y, 1, :))
+    SineTask(phase, ampl, x, y)
 end
 
 function SineTask(phase::Float64, ampl::Float64; xmin = -5.0, xmax = 5.0, npoints = 50)
     x = collect(linspace(xmin, xmax, npoints))
     y = ampl*sin.(x + phase)
-    SineTask(phase, ampl, reshape(x, 1, :), reshape(y, 1, :))
+    SineTask(phase, ampl, x, y)
 end
 
 abstract type AbstractReptileModel end
@@ -49,12 +49,12 @@ function FluxReptile()
                       Dense(64, 1)))
 end
 
-predict(m::FluxReptile, x) = m.model(x)
+predict(m::FluxReptile, x) = reshape(m.model(reshape(x, 1, :)), :)
 
 loss(m::RM, x, y) where {RM <: AbstractReptileModel} =
     mean(abs2, predict(m, x) .- y)
 
-function train_on_batch!(m::RM, batch_x, batch_y, innerstepsize) where {RM <: AbstractReptileModel}
+function train_on_batch!(m::FluxReptile, batch_x::Vector{T}, batch_y::Vector{T}, innerstepsize) where T
     l = loss(m, batch_x, batch_y)
     Flux.Tracker.back!(l)
     for p in params(m.model)
@@ -63,26 +63,82 @@ function train_on_batch!(m::RM, batch_x, batch_y, innerstepsize) where {RM <: Ab
     end
 end
 
+struct KnetReptile{T1, T2, T3, T4} <: AbstractReptileModel
+    weights::T1
+    predict::T2
+    loss::T3
+    lossgrad::T4
+end
+function KnetReptile(weights)
+    predict = function(w, x)
+        x = reshape(x, 1, :)
+        x = tanh.(w[1]*x .+ w[2])
+        x = tanh.(w[3]*x .+ w[4])
+        x = w[5]*x .+ w[6]
+        reshape(x, :)
+    end
+
+    loss(w, x, y) = mean(abs2, predict(w, x) .- y)
+    lossgrad = grad(loss)
+
+    KnetReptile(weights, predict, loss, lossgrad)
+end
+KnetReptile() = KnetReptile([randn(64, 1), zeros(64, 1), randn(64, 64), zeros(64, 1), randn(1, 64), zeros(1, 1)])
+KnetReptile(m::FluxReptile) = KnetReptile(deepcopy(Flux.data.(params(m.model))))
+
+loss(m::KnetReptile, x, y) = m.loss(m.weights, x, y)
+
+function train_on_batch!(m::KnetReptile, batch_x::Vector{T}, batch_y::Vector{T}, innerstepsize) where T
+    l = m.lossgrad(m.weights, batch_x, batch_y)
+    for i in 1:length(l)
+        m.weights[i] -= innerstepsize * l[i]
+    end
+end
+
 train_on_batch!(m::RM, task::SineTask, ids::Vector{Int}, innerstepsize) where {RM <: AbstractReptileModel} =
-  train_on_batch!(m, task.x[:, ids], task.y[:, ids], innerstepsize)
+  train_on_batch!(m, task.x[ids], task.y[ids], innerstepsize)
 
-function train!(m::RM; tasks = SineTask[], eval_task = SineTask(), inner_epochs = 1, ntrain = 10,
-               outerstepsize0 = 0.1, niter = 30_000,
-               innerstepsize = 0.02, ninneriter = 32) where {RM <: AbstractReptileModel}
+get_weights(m::FluxReptile) = deepcopy(Flux.data.(params(m.model)))
+get_weights(m::KnetReptile) = deepcopy(m.weights)
 
-    eval_ids = randperm(length(eval_task.x))[1:ntrain]
-    f_output = open("reptile.csv", "w")
+function restore_model!(m::FluxReptile, weights)
+    for (d1, d2) in zip(weights, params(m.model))
+        d2.data .= d1
+    end
+end
+
+function restore_model!(m::KnetReptile, weights)
+    for i in 1:length(weights)
+        m.weights[i] = weights[i]
+    end
+end
+
+function meta_update(m::FluxReptile, weights, outerstepsize)
+    for (d1, d2) in zip(weights, params(m.model))
+        d2.data .= d1 .+ outerstepsize*(d2.data .- d1)
+    end
+end
+
+function meta_update(m::KnetReptile, weights, outerstepsize)
+    for i in 1:length(weights)
+        m.weights[i] = weights[i] + outerstepsize*(m.weights[i] - weights[i])
+    end
+end
+
+function train!(m::RM; tasks = SineTask[],
+                inner_epochs = 1, ntrain = 10,
+                outerstepsize0 = 0.1, niter = 30_000,
+                innerstepsize = 0.02, ninneriter = 32,
+                eval_task = SineTask(),
+                eval_ids = randperm(length(eval_task.x))[1:ntrain],
+                log_file = "") where {RM <: AbstractReptileModel}
+    (!isempty(log_file)) && (f_output = open(log_file, "w"))
     res = Vector{Float64}()
-    res2 = Vector{Float64}()
     !isempty(tasks) && (niter = length(tasks))
     for iter in 1:niter
-        weights_before = deepcopy([x.data for x in params(m.model)])
+        weights_before = get_weights(m)
         # Do SGD on task
-        if !isempty(tasks)
-            f = tasks[iter]
-        else
-            f = SineTask()
-        end
+        f = !isempty(tasks) ? tasks[iter] : SineTask()
         inds = randperm(length(f.x))
         for _ in 1:inner_epochs
             for start in 1:ntrain:length(f.x)
@@ -94,41 +150,42 @@ function train!(m::RM; tasks = SineTask[], eval_task = SineTask(), inner_epochs 
         # Interpolate between current weights and trained weights from this task
         # I.e. (weights_before - weights_after) is the meta-gradient
         outerstepsize = outerstepsize0 * (1.0 - iter / niter) # linear schedule
+        meta_update(m, weights_before, outerstepsize)
 
-        for (d1, d2) in zip(weights_before, params(m.model))
-            d2.data .= d1 .+ outerstepsize*(d2.data .- d1)
-        end
-
-        model_before = deepcopy(m)
-        for inneriter in 1:ninneriter
-            train_on_batch!(m, eval_task, eval_ids, innerstepsize)
-        end
-        push!(res, Flux.data(loss(m, eval_task.x, eval_task.y)))
-        m = model_before
+        # model_before = deepcopy(m)
+        # for inneriter in 1:ninneriter
+        #     train_on_batch!(m, eval_task, eval_ids, innerstepsize)
+        # end
+        # push!(res, Flux.data(loss(m, eval_task.x, eval_task.y)))
+        # m = model_before
 
         if (iter % 1000 == 0)
-            # weights_before = deepcopy([x.data for x in params(m.model)])
-            model_before = deepcopy(m)
+            weights_before = get_weights(m)
+            # model_before = deepcopy(m)
             for inneriter in 1:ninneriter
                 train_on_batch!(m, eval_task, eval_ids, innerstepsize)
             end
             println("Iteration $iter: Loss = $(loss(m, eval_task.x, eval_task.y))")
-            m = model_before
-            # for (d1, d2) in zip(weights_before, params(m.model))
-            #     d2.data .= d1
-            # end
+            restore_model!(m, weights_before)
         end
     end
 
-    for x in res
-        write(f_output, "$x\n")
+    if !isempty(log_file)
+        for x in res
+            write(f_output, "$x\n")
+        end
+        close(f_output)
     end
-    close(f_output)
 end
 
+#######
 tasks = [SineTask() for _ in 1:30_000]
-model = ReptileModel()
-train!(model, tasks = tasks)
+eval_task = SineTask()
+eval_ids = randperm(length(eval_task.x))[1:10]
+start_model = FluxReptile()
+m1 = deepcopy(start_model)
+
+train!(m1, tasks = tasks, eval_task = eval_task, eval_ids = eval_ids)
 
 f1 = SineTask()
 train_ids = randperm(50)[1:10]
@@ -137,6 +194,21 @@ for iter in 1:32
     train_on_batch!(model, f1, train_ids, 0.02)
 end
 
+########### Misc2
+m2 = KnetReptile(start_model)
+train!(m2, tasks = tasks, eval_task = eval_task, eval_ids = eval_ids)
+# m2.lossgrad(m2.weights, [0.1, 0.2, 0.3], [10.0, 11.0, 12.0])
+
+train_on_batch!(m2, [0.1, 0.2, 0.3], [10.0, 11.0, 12.0], 0.02)
+@show m2.loss(m2.weights, [0.1, 0.2, 0.3], [10.0, 11.0, 12.0])
+
+train_on_batch!(m1, [0.1, 0.2, 0.3], [10.0, 11.0, 12.0], 0.02)
+@show loss(m1, [0.1, 0.2, 0.3], [10.0, 11.0, 12.0])
+
+@show m2.weights
+deepcopy(Flux.data.(params(model.model)))
+
+Flux.data.(params(model.model))
 ########## misc
 # m = ReptileModel2(64)
 m = ReptileModel()
@@ -322,6 +394,13 @@ l = lossgrad(w1, [0.1, 0.2, 0.3], [10.0, 11.0, 12.0])
 for i in 1:length(l)
     w1[i] -= 0.02 * l[i]
 end
+@show predict(w1, [0.1, 0.2, 0.3, 0.4, 0.5])
 
-
-predict(w1, [0.1, 0.2, 0.3])
+for _ in 1:10000
+    l = lossgrad(w1, [0.1, 0.2, 0.3, 0.4, 0.5], [10.0, 11.0, 12.0, 13.0, 14.0])
+    for i in 1:length(l)
+        w1[i] -= 0.02 * l[i]
+    end
+end
+@show predict(w1, [0.1, 0.2, 0.3, 0.4, 0.5])
+# @show loss2(w1, [0.1, 0.2, 0.3, 0.4, 0.5], [10.0, 11.0, 12.0])
