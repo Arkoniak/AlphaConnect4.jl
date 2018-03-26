@@ -131,6 +131,7 @@ function train!(m::RM; tasks = SineTask[],
                 innerstepsize = 0.02, ninneriter = 32,
                 eval_task = SineTask(),
                 eval_ids = randperm(length(eval_task.x))[1:ntrain],
+                ext_inds = Int[],
                 log_file = "") where {RM <: AbstractReptileModel}
     (!isempty(log_file)) && (f_output = open(log_file, "w"))
     res = Vector{Float64}()
@@ -139,7 +140,7 @@ function train!(m::RM; tasks = SineTask[],
         weights_before = get_weights(m)
         # Do SGD on task
         f = !isempty(tasks) ? tasks[iter] : SineTask()
-        inds = randperm(length(f.x))
+        inds = isempty(ext_inds) ? randperm(length(f.x)) : ext_inds[iter]
         for _ in 1:inner_epochs
             for start in 1:ntrain:length(f.x)
                 mbinds = inds[start:(start + ntrain - 1)]
@@ -149,7 +150,7 @@ function train!(m::RM; tasks = SineTask[],
 
         # Interpolate between current weights and trained weights from this task
         # I.e. (weights_before - weights_after) is the meta-gradient
-        outerstepsize = outerstepsize0 * (1.0 - iter / niter) # linear schedule
+        outerstepsize = outerstepsize0 * (1.0 - (iter - 1) / niter) # linear schedule
         meta_update(m, weights_before, outerstepsize)
 
         # model_before = deepcopy(m)
@@ -182,6 +183,28 @@ end
 tasks = [SineTask() for _ in 1:30_000]
 eval_task = SineTask()
 eval_ids = randperm(length(eval_task.x))[1:10]
+ext_inds = map(_ -> randperm(length(eval_task.x)), 1:30_000)
+
+open("tasks.csv", "w") do f
+    for t in tasks
+        write(f, "$(t.phase),$(t.ampl)\n")
+    end
+end
+
+open("eval_task.csv", "w") do f
+    write(f, "$(eval_task.phase),$(eval_task.ampl)")
+end
+
+open("eval_ids.csv", "w") do f
+    write(f, join(map(x -> x - 1, eval_ids), ","))
+end
+
+open("ext_inds.csv", "w") do f
+    for t in ext_inds
+        write(f, "$(join(map(x -> x - 1, t), ","))\n")
+    end
+end
+
 start_model = FluxReptile()
 m1 = deepcopy(start_model)
 
